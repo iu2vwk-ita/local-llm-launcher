@@ -1,12 +1,12 @@
 param([switch]$SelfTest)
 
 # =====================================================================
-#  LLAMA LAUNCHER - avvio modelli GGUF con llama.cpp
-#  Rileva i modelli nella cartella, legge i metadati reali dal GGUF
-#  (layer, embedding, GQA, MoE, quantizzazione) e calcola i parametri
-#  di lancio in base alla VRAM e alla RAM dichiarate dall'utente.
+#  LLAMA LAUNCHER - run GGUF models with llama.cpp
+#  Scans the folder for models, reads the real metadata from each GGUF
+#  (layers, embedding, GQA, MoE, quantization) and computes the launch
+#  parameters from the VRAM and RAM declared by the user.
 #
-#  Uso: mettere questo file nella cartella dei .gguf e lanciarlo.
+#  Usage: put this file in the folder with the .gguf files and run it.
 # =====================================================================
 
 #Requires -Version 5.1
@@ -38,14 +38,14 @@ function Write-Rule([string]$Text, [string]$Color = $C.Frame) {
 }
 
 function Write-Banner {
-    try { Clear-Host } catch { }   # console rediretta: nessuno schermo da pulire
+    try { Clear-Host } catch { }   # redirected console: no screen to clear
     Write-Host ''
     Write-Host '  ╔════════════════════════════════════════════════════════════════════════╗' -ForegroundColor $C.Frame
     Write-Host '  ║' -NoNewline -ForegroundColor $C.Frame
     Write-Host '   L L A M A   L A U N C H E R                                          ' -NoNewline -ForegroundColor $C.Title
     Write-Host '║' -ForegroundColor $C.Frame
     Write-Host '  ║' -NoNewline -ForegroundColor $C.Frame
-    Write-Host '   parametri calcolati sui metadati reali del modello                   ' -NoNewline -ForegroundColor $C.Dim
+    Write-Host '   parameters computed from the real model metadata                     ' -NoNewline -ForegroundColor $C.Dim
     Write-Host '║' -ForegroundColor $C.Frame
     Write-Host '  ╚════════════════════════════════════════════════════════════════════════╝' -ForegroundColor $C.Frame
     Write-Host ''
@@ -69,8 +69,8 @@ function Write-Bar([int]$Used, [int]$Total, [int]$Width = 40) {
     Write-Host ('] {0,5:N1} / {1:N0} GB  ({2:P0})' -f ($Used / 1024), ($Total / 1024), $pct) -ForegroundColor $C.Dim
 }
 
-# ------------------------------------------------------- lettore GGUF --
-# Formato: magic "GGUF" | versione u32 | n_tensor u64 | n_kv u64 | kv...
+# ------------------------------------------------------- GGUF reader --
+# Format: magic "GGUF" | version u32 | n_tensor u64 | n_kv u64 | kv...
 
 $GgufFixedSize = @{ 0 = 1; 1 = 1; 2 = 2; 3 = 2; 4 = 4; 5 = 4; 6 = 4; 7 = 1; 10 = 8; 11 = 8; 12 = 8 }
 
@@ -93,7 +93,7 @@ function Read-GgufScalar($br, [int]$t) {
         10 { return [int64]$br.ReadUInt64() }
         11 { return [int64]$br.ReadInt64() }
         12 { return [double]$br.ReadDouble() }
-        default { throw "tipo GGUF non gestito: $t" }
+        default { throw "unsupported GGUF type: $t" }
     }
 }
 
@@ -118,7 +118,7 @@ function Read-GgufValue($br, [int]$t) {
     if ($t -ne 9) { return (Read-GgufScalar $br $t) }
     $at = [int]$br.ReadUInt32(); $n = [int]$br.ReadUInt64()
     if ($at -eq 9) { Skip-GgufValue $br 9; return $null }
-    if ($n -gt 4096) { # array enorme (vocabolario): non serve
+    if ($n -gt 4096) { # huge array (vocabulary): not needed
         if ($at -eq 8) { for ($i = 0; $i -lt $n; $i++) { $l = $br.ReadUInt64(); [void]$br.BaseStream.Seek([int64]$l, 'Current') } }
         else { [void]$br.BaseStream.Seek([int64]($n * $GgufFixedSize[$at]), 'Current') }
         return $null
@@ -128,7 +128,7 @@ function Read-GgufValue($br, [int]$t) {
     return $out
 }
 
-# nomi dei tipi di quantizzazione (general.file_type)
+# quantization type names (general.file_type)
 $FileTypeNames = @{
     0='F32'; 1='F16'; 2='Q4_0'; 3='Q4_1'; 7='Q8_0'; 8='Q5_0'; 9='Q5_1'; 10='Q2_K'
     11='Q3_K_S'; 12='Q3_K_M'; 13='Q3_K_L'; 14='Q4_K_S'; 15='Q4_K_M'; 16='Q5_K_S'
@@ -138,7 +138,7 @@ $FileTypeNames = @{
     38='MXFP4'; 39='NVFP4'
 }
 
-# preset sampler per famiglia di architettura (fonte: doc ufficiali del modello)
+# sampler presets per architecture family (source: official model docs)
 # Qwen3 / Qwen3.8: https://unsloth.ai/docs/models/qwen3.8
 $SamplerPresets = @{
     'qwen3' = @{
@@ -160,7 +160,7 @@ function Get-GgufMeta([string]$Path) {
     $br = New-Object System.IO.BinaryReader($bs)
     try {
         if ($br.ReadUInt32() -ne 0x46554747) { return $null }   # 'GGUF'
-        [void]$br.ReadUInt32()                                   # versione
+        [void]$br.ReadUInt32()                                   # version
         $nTensor = $br.ReadUInt64()
         $nKv = $br.ReadUInt64()
         for ($i = 0; $i -lt $nKv; $i++) {
@@ -170,8 +170,8 @@ function Get-GgufMeta([string]$Path) {
             foreach ($w in $wanted) { if ($key -eq $w -or $key.EndsWith($w)) { $keep = $true; break } }
             if ($keep) { $kv[$key] = Read-GgufValue $br $t } else { Skip-GgufValue $br $t }
         }
-        # scorre i nomi dei tensori: se trova una testa MTP nativa ("nextn")
-        # il modello puo' fare speculative decoding senza draft esterno
+        # walk the tensor names: if a native MTP head ("nextn") is found
+        # the model can do speculative decoding without an external draft
         $hasMtp = $false
         for ($ti = 0; $ti -lt $nTensor; $ti++) {
             $tname = Read-GgufStr $br
@@ -193,7 +193,7 @@ function Get-GgufMeta([string]$Path) {
     if ($nHead -is [array]) { $nHead = ($nHead | Measure-Object -Maximum).Maximum }
     if ($nKvH  -is [array]) { $nKvH  = ($nKvH  | Measure-Object -Maximum).Maximum }
     $ft = K 'general.file_type'
-    $quant = 'sconosciuta'
+    $quant = 'unknown'
     if ($null -ne $ft -and $FileTypeNames.ContainsKey([int]$ft)) { $quant = $FileTypeNames[[int]$ft] }
 
     [pscustomobject]@{
@@ -228,7 +228,7 @@ function Get-MetaCached([System.IO.FileInfo]$File) {
     return $meta
 }
 
-# ------------------------------------------------- ricerca dei modelli --
+# ------------------------------------------------- find models --
 
 function Get-Models {
     $dirs = @($ScriptDir)
@@ -242,7 +242,7 @@ function Get-Models {
     }
     $files = $files | Where-Object { $_.Name -notmatch 'mmproj|dflash|dspark' } | Sort-Object FullName -Unique
 
-    # shard multi-file: tiene solo il primo pezzo, somma le dimensioni
+    # multi-file shards: keep only the first part, sum the sizes
     $out = @()
     $seen = @{}
     foreach ($f in $files) {
@@ -260,9 +260,9 @@ function Get-Models {
     return $out | Sort-Object Name
 }
 
-# modelli "draft" per speculative decoding (DFlash/DSpark): stessa cartella,
-# nome con "dflash"/"dspark", abbinati al target per prefisso famiglia
-# (es. "Qwen3.8-27B-Q4_K_M" <-> "Qwen3.8-27B-DFlash2-Q8_0")
+# "draft" models for speculative decoding (DFlash/DSpark): same folder,
+# name with "dflash"/"dspark", matched to the target by family prefix
+# (e.g. "Qwen3.8-27B-Q4_K_M" <-> "Qwen3.8-27B-DFlash2-Q8_0")
 function Get-DraftModels {
     $dirs = @($ScriptDir)
     if ($cfg -and $cfg.ExtraDirs) { $dirs += $cfg.ExtraDirs }
@@ -283,7 +283,7 @@ function Find-DraftFor($m, $drafts) {
     return $drafts | Where-Object { (Get-ModelFamily $_.BaseName) -eq $fam } | Select-Object -First 1
 }
 
-# ------------------------------------------------------- calcolo fit ---
+# ------------------------------------------------------- fit calc ---
 
 $CacheBytes = @{ 'f16' = 2.0; 'q8_0' = 1.0625; 'q5_1' = 0.75; 'q4_0' = 0.5625 }
 
@@ -297,13 +297,13 @@ function Get-KvPerTokenMB($meta, [string]$cacheType) {
     if ($kvHeads -le 0) { $kvHeads = 8 }
     $embdKv = $headDim * $kvHeads
     $bpe = $CacheBytes[$cacheType]
-    # K + V per ogni layer
+    # K + V per layer
     return (2.0 * $meta.NLayer * $embdKv * $bpe) / 1MB
 }
 
-# Ripartizione VRAM: pesi per layer + KV per layer + buffer di calcolo.
-# ponytail: quota esperti MoE stimata all'80% del layer; ricalibrabile
-# guardando "load_tensors" nel log se il fit risulta ottimista.
+# VRAM split: weights per layer + KV per layer + compute buffer.
+# ponytail: MoE expert share estimated at 80% of the layer; retunable
+# by watching "load_tensors" in the log if the fit looks optimistic.
 $MoeShare = 0.80
 
 function Solve-Fit {
@@ -311,13 +311,13 @@ function Solve-Fit {
 
     $nl = $meta.NLayer
     $weightsMB = $m.Bytes / 1MB
-    # embedding + output pesano quanto ~1 layer in piu'
+    # embedding + output weigh about ~1 extra layer
     $perLayerMB = $weightsMB / ($nl + 1)
     $kvPerLayerMB = (Get-KvPerTokenMB $meta $CacheType) * $Ctx / $nl
 
-    # buffer di calcolo: logits + grafo di attivazione dell'ubatch
+    # compute buffer: logits + ubatch activation graph
     $computeMB = 320 + ($UBatch * $meta.NEmbd * 2 * 8) / 1MB
-    $reserveMB = [Math]::Min(1400, $VramMB * 0.10)   # desktop, driver, altre app
+    $reserveMB = [Math]::Min(1400, $VramMB * 0.10)   # desktop, driver, other apps
     $availMB = $VramMB - $reserveMB - $computeMB
 
     $perLayerTotal = $perLayerMB + $kvPerLayerMB
@@ -328,7 +328,7 @@ function Solve-Fit {
     if ($ngl -ge $nl) {
         $ngl = $nl
     } elseif ($meta.NExpert -gt 0) {
-        # MoE: meglio tenere tutti i layer su GPU e spostare solo gli esperti
+        # MoE: better to keep all layers on GPU and move only the experts
         $needMB = ($nl * $perLayerTotal) - $availMB
         $freedPerLayer = $perLayerMB * $MoeShare
         $nCpuMoe = [int][Math]::Ceiling($needMB / $freedPerLayer)
@@ -373,22 +373,22 @@ function Find-MaxCtx {
     return $best
 }
 
-# --------------------------------------------------------- profili -----
+# --------------------------------------------------------- profiles -----
 
 function Get-Profiles($meta) {
     $trained = [int]$meta.CtxTrain
     if ($trained -le 0) { $trained = 32768 }
     @(
-        [pscustomobject]@{ Id='1'; Name='RAPIDO'; Desc='chat corta, massima velocita'; Ctx=[Math]::Min(8192,$trained);   Cache='f16';  UBatch=512;  Batch=2048 }
-        [pscustomobject]@{ Id='2'; Name='BILANCIATO'; Desc='uso normale, codice, narrativa'; Ctx=[Math]::Min(32768,$trained); Cache='q8_0'; UBatch=512;  Batch=2048 }
-        [pscustomobject]@{ Id='3'; Name='LUNGO'; Desc='documenti, repo, analisi';       Ctx=[Math]::Min(131072,$trained); Cache='q8_0'; UBatch=1024; Batch=4096 }
-        [pscustomobject]@{ Id='4'; Name='MASSIMO'; Desc='tutto il contesto addestrato'; Ctx=$trained;                     Cache='q4_0'; UBatch=1024; Batch=4096 }
-        [pscustomobject]@{ Id='5'; Name='AUTO-FIT'; Desc='ctx piu grande interamente in VRAM'; Ctx=-1; Cache='q8_0'; UBatch=512; Batch=2048 }
-        [pscustomobject]@{ Id='6'; Name='MANUALE'; Desc='scegli tu il contesto';        Ctx=-2; Cache='q8_0'; UBatch=512;  Batch=2048 }
+        [pscustomobject]@{ Id='1'; Name='FAST'; Desc='short chat, max speed'; Ctx=[Math]::Min(8192,$trained);   Cache='f16';  UBatch=512;  Batch=2048 }
+        [pscustomobject]@{ Id='2'; Name='BALANCED'; Desc='normal use, code, prose'; Ctx=[Math]::Min(32768,$trained); Cache='q8_0'; UBatch=512;  Batch=2048 }
+        [pscustomobject]@{ Id='3'; Name='LONG'; Desc='documents, repos, analysis';       Ctx=[Math]::Min(131072,$trained); Cache='q8_0'; UBatch=1024; Batch=4096 }
+        [pscustomobject]@{ Id='4'; Name='MAX'; Desc='full trained context'; Ctx=$trained;                     Cache='q4_0'; UBatch=1024; Batch=4096 }
+        [pscustomobject]@{ Id='5'; Name='AUTO-FIT'; Desc='largest ctx fully in VRAM'; Ctx=-1; Cache='q8_0'; UBatch=512; Batch=2048 }
+        [pscustomobject]@{ Id='6'; Name='MANUAL'; Desc='pick the context yourself';        Ctx=-2; Cache='q8_0'; UBatch=512;  Batch=2048 }
     )
 }
 
-# --------------------------------------------- installazione llama.cpp --
+# --------------------------------------------- install llama.cpp --
 
 function Find-Server {
     $cands = @()
@@ -408,31 +408,31 @@ function Get-ServerHelp([string]$exe) {
 
 function Install-LlamaCpp {
     Write-Banner
-    Write-Rule 'INSTALLAZIONE / AGGIORNAMENTO llama.cpp'
+    Write-Rule 'INSTALL / UPDATE llama.cpp'
     Write-Host ''
     $gpu = (Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name) -join ', '
-    Write-Field 'GPU rilevate' $gpu
+    Write-Field 'GPUs detected' $gpu
     Write-Host ''
-    Write-Host '   [1] CUDA   - NVIDIA (piu veloce, scarica anche il runtime CUDA)' -ForegroundColor $C.Val
-    Write-Host '   [2] Vulkan - AMD / Intel / NVIDIA generica' -ForegroundColor $C.Val
-    Write-Host '   [3] CPU    - nessuna GPU' -ForegroundColor $C.Val
-    Write-Host '   [Q] annulla' -ForegroundColor $C.Key
+    Write-Host '   [1] CUDA   - NVIDIA (fastest, also downloads the CUDA runtime)' -ForegroundColor $C.Val
+    Write-Host '   [2] Vulkan - AMD / Intel / generic NVIDIA' -ForegroundColor $C.Val
+    Write-Host '   [3] CPU    - no GPU' -ForegroundColor $C.Val
+    Write-Host '   [Q] cancel' -ForegroundColor $C.Key
     Write-Host ''
     $b = (Read-Host '   Backend').Trim().ToUpper()
     if ($b -eq 'Q') { return }
     $pattern = switch ($b) { '1' { 'bin-win-cuda' } '2' { 'bin-win-vulkan' } '3' { 'bin-win-cpu' } default { $null } }
-    if (-not $pattern) { Write-Host '   scelta non valida' -ForegroundColor $C.Err; Start-Sleep 2; return }
+    if (-not $pattern) { Write-Host '   invalid choice' -ForegroundColor $C.Err; Start-Sleep 2; return }
 
     Write-Host ''
-    Write-Host '   Interrogazione GitHub...' -ForegroundColor $C.Dim
+    Write-Host '   Querying GitHub...' -ForegroundColor $C.Dim
     $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest' -Headers @{ 'User-Agent' = 'llama-launcher' }
     $asset = $rel.assets | Where-Object { $_.name -like "*$pattern*x64.zip" -and $_.name -notlike 'cudart*' } | Select-Object -First 1
-    if (-not $asset) { Write-Host "   nessun pacchetto '$pattern' nella release $($rel.tag_name)" -ForegroundColor $C.Err; Read-Host '   invio'; return }
+    if (-not $asset) { Write-Host "   no '$pattern' package in release $($rel.tag_name)" -ForegroundColor $C.Err; Read-Host '   Enter'; return }
 
     $dest = Join-Path $ScriptDir 'llama.cpp'
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     $tmp = Join-Path $env:TEMP $asset.name
-    Write-Host "   Scarico $($asset.name) ($([math]::Round($asset.size/1MB)) MB)..." -ForegroundColor $C.Title
+    Write-Host "   Downloading $($asset.name) ($([math]::Round($asset.size/1MB)) MB)..." -ForegroundColor $C.Title
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -UseBasicParsing
     Expand-Archive -Path $tmp -DestinationPath $dest -Force
     Remove-Item $tmp -Force
@@ -441,26 +441,26 @@ function Install-LlamaCpp {
         $cud = $rel.assets | Where-Object { $_.name -like 'cudart-*x64.zip' } | Select-Object -First 1
         if ($cud) {
             $tmp2 = Join-Path $env:TEMP $cud.name
-            Write-Host "   Scarico $($cud.name)..." -ForegroundColor $C.Title
+            Write-Host "   Downloading $($cud.name)..." -ForegroundColor $C.Title
             Invoke-WebRequest -Uri $cud.browser_download_url -OutFile $tmp2 -UseBasicParsing
             Expand-Archive -Path $tmp2 -DestinationPath $dest -Force
             Remove-Item $tmp2 -Force
         }
     }
 
-    # il pacchetto a volte estrae in una sottocartella: appiattisci
+    # the package sometimes extracts into a subfolder: flatten it
     $exe = Get-ChildItem -Path $dest -Filter 'llama-server.exe' -Recurse -File | Select-Object -First 1
-    if (-not $exe) { Write-Host '   llama-server.exe non trovato nel pacchetto' -ForegroundColor $C.Err; Read-Host '   invio'; return }
+    if (-not $exe) { Write-Host '   llama-server.exe not found in the package' -ForegroundColor $C.Err; Read-Host '   Enter'; return }
 
     $cfg.ServerExe = $exe.FullName
     $cfg.ServerHelp = $null
     Save-Config
     Write-Host ''
-    Write-Host "   Installato: $($exe.FullName)   [$($rel.tag_name)]" -ForegroundColor $C.Ok
-    Read-Host '   invio per continuare'
+    Write-Host "   Installed: $($exe.FullName)   [$($rel.tag_name)]" -ForegroundColor $C.Ok
+    Read-Host '   press Enter to continue'
 }
 
-# ---------------------------------------------------- configurazione ---
+# ---------------------------------------------------- configuration ---
 
 function Get-DetectedVram {
     try {
@@ -479,7 +479,7 @@ function Save-Config { $cfg | ConvertTo-Json -Depth 4 | Set-Content $ConfigPath 
 
 function Ask-Hardware {
     Write-Banner
-    Write-Rule 'CONFIGURAZIONE HARDWARE'
+    Write-Rule 'HARDWARE SETUP'
     Write-Host ''
     $sizes = @(4,6,8,10,11,12,16,20,24,32,40,48,64,80,96,128,192,256)
     $detV = Get-DetectedVram
@@ -488,7 +488,7 @@ function Ask-Hardware {
     try { $cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum } catch { }
     if ($cores -le 0) { $cores = [Environment]::ProcessorCount / 2 }
 
-    Write-Host '   VRAM della scheda video (GB):' -ForegroundColor $C.Title
+    Write-Host '   Video card VRAM (GB):' -ForegroundColor $C.Title
     Write-Host ''
     for ($i = 0; $i -lt $sizes.Count; $i += 6) {
         $row = ''
@@ -498,8 +498,8 @@ function Ask-Hardware {
         Write-Host "  $row" -ForegroundColor $C.Val
     }
     Write-Host ''
-    if ($detV -gt 0) { Write-Host "   rilevata: $detV GB  (invio per accettare)" -ForegroundColor $C.Ok }
-    Write-Host '   Puoi anche digitare direttamente i GB (4-256).' -ForegroundColor $C.Dim
+    if ($detV -gt 0) { Write-Host "   detected: $detV GB  (Enter to accept)" -ForegroundColor $C.Ok }
+    Write-Host '   You can also type the GB directly (4-256).' -ForegroundColor $C.Dim
     $ans = (Read-Host '   VRAM').Trim()
     $vram = 0
     if ($ans -eq '' -and $detV -gt 0) { $vram = $detV }
@@ -512,13 +512,13 @@ function Ask-Hardware {
     if ($vram -lt 1) { $vram = if ($detV -gt 0) { $detV } else { 8 } }
 
     Write-Host ''
-    Write-Host "   RAM di sistema in GB (rilevata: $detR, invio per accettare):" -ForegroundColor $C.Title
+    Write-Host "   System RAM in GB (detected: $detR, Enter to accept):" -ForegroundColor $C.Title
     $ansR = (Read-Host '   RAM').Trim()
     $ram = $detR
     if ($ansR -match '^\d+$' -and [int]$ansR -ge 2) { $ram = [int]$ansR }
 
     Write-Host ''
-    Write-Host "   Core fisici della CPU (rilevati: $cores, invio per accettare):" -ForegroundColor $C.Title
+    Write-Host "   Physical CPU cores (detected: $cores, Enter to accept):" -ForegroundColor $C.Title
     $ansC = (Read-Host '   Core').Trim()
     if ($ansC -match '^\d+$' -and [int]$ansC -ge 1) { $cores = [int]$ansC }
 
@@ -530,12 +530,12 @@ function Ask-Hardware {
     Write-Host ''
     Write-Field 'VRAM' "$vram GB" $C.Ok
     Write-Field 'RAM' "$ram GB" $C.Ok
-    Write-Field 'Core fisici' "$cores" $C.Ok
+    Write-Field 'Physical cores' "$cores" $C.Ok
     Write-Host ''
-    Read-Host '   invio per continuare'
+    Read-Host '   press Enter to continue'
 }
 
-# --------------------------------------------------------- avvio -------
+# --------------------------------------------------------- launch -------
 
 function Get-ArgList {
     param($m, $meta, $fit, $prof, [string]$help, [int]$Port, [int]$Threads, [bool]$Hybrid,
@@ -556,7 +556,7 @@ function Get-ArgList {
         if ($help -match '--n-cpu-moe') { $a += @('--n-cpu-moe', "$($fit.NCpuMoe)") }
         elseif ($help -match '--override-tensor') { $a += @('--override-tensor', 'ffn_(up|down|gate)_exps=CPU') }
     }
-    # mlock serve solo quando una parte resta in RAM e la RAM avanza
+    # mlock is only useful when part stays in RAM and RAM is plentiful
     if ($Hybrid -and ($fit.RamMB -lt $cfg.RamGB * 1024 * 0.6)) {
         if ($help -match '--load-mode') { $a += @('--load-mode', 'mlock') }
         elseif ($help -match '--mlock') { $a += '--mlock' }
@@ -583,7 +583,7 @@ function Get-ArgList {
         }
         if ($help -match '--spec-draft-ngl') { $a += @('--spec-draft-ngl', 'all') }
     } elseif ($SpecType -and $help -match '--spec-type') {
-        # self-speculative: testa MTP gia' nei pesi del modello, nessun file draft
+        # self-speculative: MTP head already in the model weights, no draft file
         $a += @('--spec-type', $SpecType)
     }
     $a += @('--alias', 'local-model', '-n', '-1')
@@ -597,13 +597,13 @@ function Wait-Health([int]$Port, [int]$Seconds, [string]$LogFile, $Proc = $null)
     while ($sw.Elapsed.TotalSeconds -lt $Seconds) {
         try {
             $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-            if ($r.StatusCode -eq 200) { Write-Host "`r   caricamento completato in $([int]$sw.Elapsed.TotalSeconds)s          " -ForegroundColor $C.Ok; return $true }
+            if ($r.StatusCode -eq 200) { Write-Host "`r   load complete in $([int]$sw.Elapsed.TotalSeconds)s          " -ForegroundColor $C.Ok; return $true }
         } catch { }
         if ($Proc -and $Proc.HasExited) {
-            Write-Host "`r   processo terminato dopo $([int]$sw.Elapsed.TotalSeconds)s (crash in avvio)          " -ForegroundColor $C.Err
+            Write-Host "`r   process exited after $([int]$sw.Elapsed.TotalSeconds)s (crash on startup)          " -ForegroundColor $C.Err
             return $false
         }
-        Write-Host ("`r   {0} caricamento... {1,3}s" -f $spin[$i % 4], [int]$sw.Elapsed.TotalSeconds) -NoNewline -ForegroundColor $C.Dim
+        Write-Host ("`r   {0} loading... {1,3}s" -f $spin[$i % 4], [int]$sw.Elapsed.TotalSeconds) -NoNewline -ForegroundColor $C.Dim
         $i++
         Start-Sleep -Milliseconds 700
     }
@@ -613,28 +613,28 @@ function Wait-Health([int]$Port, [int]$Seconds, [string]$LogFile, $Proc = $null)
 
 function Show-Plan($m, $meta, $fit, $prof, $threads, $argList, [int]$Port) {
     Write-Host ''
-    Write-Rule 'PIANO DI AVVIO'
+    Write-Rule 'LAUNCH PLAN'
     Write-Host ''
-    Write-Field 'Modello' $m.Name $C.Title
-    Write-Field 'Architettura' ("{0}  |  quant {1}  |  {2} layer" -f $meta.Arch, $meta.Quant, $meta.NLayer)
-    if ($meta.NExpert -gt 0) { Write-Field 'MoE' ("{0} esperti, {1} attivi per token" -f $meta.NExpert, $meta.NExpertUsed) $C.Title }
-    Write-Field 'Profilo' ("{0} - {1}" -f $prof.Name, $prof.Desc) $C.Title
+    Write-Field 'Model' $m.Name $C.Title
+    Write-Field 'Architecture' ("{0}  |  quant {1}  |  {2} layer" -f $meta.Arch, $meta.Quant, $meta.NLayer)
+    if ($meta.NExpert -gt 0) { Write-Field 'MoE' ("{0} experts, {1} active per token" -f $meta.NExpert, $meta.NExpertUsed) $C.Title }
+    Write-Field 'Profile' ("{0} - {1}" -f $prof.Name, $prof.Desc) $C.Title
     Write-Host ''
-    Write-Field 'Contesto' ("{0:N0} token (max addestrato {1:N0})" -f $fit.Ctx, $meta.CtxTrain)
-    Write-Field 'Layer su GPU' ("{0} / {1}" -f $fit.Ngl, $meta.NLayer) $(if ($fit.Ngl -ge $meta.NLayer) { $C.Ok } else { $C.Warn })
-    if ($fit.NCpuMoe -gt 0) { Write-Field 'Esperti su CPU' ("{0} layer (--n-cpu-moe)" -f $fit.NCpuMoe) $C.Warn }
-    Write-Field 'Cache KV' ("{0}  ({1:N0} MB per {2:N0} token)" -f $fit.CacheType, ($fit.KvPerLayerMB * $meta.NLayer), $fit.Ctx)
+    Write-Field 'Context' ("{0:N0} token (max addestrato {1:N0})" -f $fit.Ctx, $meta.CtxTrain)
+    Write-Field 'Layers on GPU' ("{0} / {1}" -f $fit.Ngl, $meta.NLayer) $(if ($fit.Ngl -ge $meta.NLayer) { $C.Ok } else { $C.Warn })
+    if ($fit.NCpuMoe -gt 0) { Write-Field 'Experts on CPU' ("{0} layers (--n-cpu-moe)" -f $fit.NCpuMoe) $C.Warn }
+    Write-Field 'KV cache' ("{0}  ({1:N0} MB per {2:N0} token)" -f $fit.CacheType, ($fit.KvPerLayerMB * $meta.NLayer), $fit.Ctx)
     Write-Field 'Batch / ubatch' ("{0} / {1}" -f $prof.Batch, $prof.UBatch)
     Write-Field 'Thread' "$threads"
-    Write-Field 'Porta' "http://127.0.0.1:$Port"
+    Write-Field 'Port' "http://127.0.0.1:$Port"
     Write-Host ''
-    Write-Host '   VRAM stimata' -ForegroundColor $C.Dim
+    Write-Host '   Estimated VRAM' -ForegroundColor $C.Dim
     Write-Bar $fit.VramMB ($cfg.VramGB * 1024)
-    Write-Host '   RAM stimata ' -ForegroundColor $C.Dim
+    Write-Host '   Estimated RAM ' -ForegroundColor $C.Dim
     Write-Bar $fit.RamMB ($cfg.RamGB * 1024)
     Write-Host ''
-    if (-not $fit.FitsVram) { Write-Host '   ! il modello non entra: verra usato offload parziale, velocita ridotta' -ForegroundColor $C.Warn }
-    if (-not $fit.FitsRam)  { Write-Host '   ! RAM insufficiente per la parte su CPU: rischio swap' -ForegroundColor $C.Err }
+    if (-not $fit.FitsVram) { Write-Host '   ! model does not fit: partial offload will be used, reduced speed' -ForegroundColor $C.Warn }
+    if (-not $fit.FitsRam)  { Write-Host '   ! not enough RAM for the CPU part: swap risk' -ForegroundColor $C.Err }
     Write-Rule
     Write-Host ('   ' + ($argList -join ' ')) -ForegroundColor $C.Dim
     Write-Host ''
@@ -650,7 +650,7 @@ function Start-Model($m, $meta, $fit, $prof, [string]$exe, [string]$help, [int]$
     $argList = Get-ArgList $m $meta $fit $prof $help $Port $threads $hybrid $Sampler $Reasoning $ReasoningEffort $DraftModel $SpecType
 
     Show-Plan $m $meta $fit $prof $threads $argList $Port
-    $go = (Read-Host '   [invio] avvia   [n] annulla').Trim().ToLower()
+    $go = (Read-Host '   [Enter] start   [n] cancel').Trim().ToLower()
     if ($go -eq 'n') { return $false }
 
     Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -660,13 +660,13 @@ function Start-Model($m, $meta, $fit, $prof, [string]$exe, [string]$help, [int]$
 
     Write-Host ''
     if (-not (Wait-Health $Port 300 $log $proc)) {
-        Write-Host '   il server non risponde. Ultime righe del log:' -ForegroundColor $C.Err
+        Write-Host '   the server is not responding. Last log lines:' -ForegroundColor $C.Err
         if (Test-Path "$log.err") { Get-Content "$log.err" -Tail 15 | ForEach-Object { Write-Host "     $_" -ForegroundColor $C.Dim } }
-        Read-Host '   invio'
+        Read-Host '   Enter'
         return $false
     }
     Write-Host ''
-    Write-Host "   Server pronto:  http://127.0.0.1:$Port" -ForegroundColor $C.Ok
+    Write-Host "   Server ready:   http://127.0.0.1:$Port" -ForegroundColor $C.Ok
     Write-Host "   Web UI:         http://127.0.0.1:$Port" -ForegroundColor $C.Ok
     Write-Host "   Log:            $log" -ForegroundColor $C.Dim
     Write-Host ''
@@ -678,13 +678,13 @@ function Start-Model($m, $meta, $fit, $prof, [string]$exe, [string]$help, [int]$
 function Show-ModelList($models, $metas) {
     Write-Banner
     $srv = Find-Server
-    Write-Field 'llama-server' $(if ($srv) { $srv } else { 'NON TROVATO - premi [I] per installarlo' }) $(if ($srv) { $C.Ok } else { $C.Err })
+    Write-Field 'llama-server' $(if ($srv) { $srv } else { 'NOT FOUND - press [I] to install it' }) $(if ($srv) { $C.Ok } else { $C.Err })
     Write-Field 'Hardware' ("VRAM {0} GB  |  RAM {1} GB  |  {2} core" -f $cfg.VramGB, $cfg.RamGB, $cfg.Cores)
-    Write-Field 'Cartella' $ScriptDir
+    Write-Field 'Folder' $ScriptDir
     Write-Host ''
-    Write-Rule ("MODELLI TROVATI: {0}" -f $models.Count)
+    Write-Rule ("MODELS FOUND: {0}" -f $models.Count)
     Write-Host ''
-    Write-Host '    #  modello                                       dim  quant    layer    ctx max  fit' -ForegroundColor $C.Dim
+    Write-Host '    #  model                                          size quant    layer    ctx max  fit' -ForegroundColor $C.Dim
     Write-Host '   ───────────────────────────────────────────────────────────────────────────────────' -ForegroundColor $C.Frame
     for ($i = 0; $i -lt $models.Count; $i++) {
         $m = $models[$i]; $meta = $metas[$i]
@@ -692,14 +692,14 @@ function Show-ModelList($models, $metas) {
         if ($name.Length -gt 40) { $name = $name.Substring(0, 37) + '...' }
         $gb = $m.Bytes / 1GB
         if ($null -eq $meta) {
-            Write-Host ('   {0,2}. {1,-42} {2,5:N1}G  {3}' -f ($i + 1), $name, $gb, 'GGUF illeggibile') -ForegroundColor $C.Err
+            Write-Host ('   {0,2}. {1,-42} {2,5:N1}G  {3}' -f ($i + 1), $name, $gb, 'unreadable GGUF') -ForegroundColor $C.Err
             continue
         }
         $fit = Solve-Fit $m $meta ([Math]::Min(8192, [int]$meta.CtxTrain)) 'q8_0' ($cfg.VramGB * 1024) ($cfg.RamGB * 1024)
-        $badge = '  parziale'; $bcol = $C.Warn
-        if ($fit.FullGpu) { $badge = '  GPU piena'; $bcol = $C.Ok }
+        $badge = '  partial'; $bcol = $C.Warn
+        if ($fit.FullGpu) { $badge = '  full GPU'; $bcol = $C.Ok }
         elseif ($fit.NCpuMoe -gt 0) { $badge = '  MoE->CPU'; $bcol = $C.Title }
-        if (-not $fit.FitsRam) { $badge = '  troppo grande'; $bcol = $C.Err }
+        if (-not $fit.FitsRam) { $badge = '  too large'; $bcol = $C.Err }
         $moe = if ($meta.NExpert -gt 0) { '*' } else { ' ' }
         Write-Host ('   {0,2}. ' -f ($i + 1)) -NoNewline -ForegroundColor $C.Key
         Write-Host ('{0,-42}' -f $name) -NoNewline -ForegroundColor $C.Val
@@ -707,11 +707,11 @@ function Show-ModelList($models, $metas) {
         Write-Host $badge -ForegroundColor $bcol
     }
     Write-Host ''
-    Write-Host '   * = modello MoE (esperti spostabili su CPU)' -ForegroundColor $C.Dim
+    Write-Host '   * = MoE model (experts can be moved to CPU)' -ForegroundColor $C.Dim
     Write-Rule
-    Write-Host '   [1-9] avvia modello    [K] chiudi i server attivi    [H] hardware' -ForegroundColor $C.Key
-    Write-Host '   [I]   installa/aggiorna llama.cpp                    [D] aggiungi cartella modelli' -ForegroundColor $C.Key
-    Write-Host '   [B]   benchmark modello                              [Q] esci' -ForegroundColor $C.Key
+    Write-Host '   [1-9] start model      [K] stop the active servers   [H] hardware' -ForegroundColor $C.Key
+    Write-Host '   [I]   install/update llama.cpp                       [D] add model folder' -ForegroundColor $C.Key
+    Write-Host '   [B]   benchmark model                               [Q] quit' -ForegroundColor $C.Key
     Write-Host ''
 }
 
@@ -719,7 +719,7 @@ function Choose-Profile($m, $meta) {
     $vram = $cfg.VramGB * 1024; $ram = $cfg.RamGB * 1024
     $profs = Get-Profiles $meta
     Write-Host ''
-    Write-Rule ("PROFILO PER: {0}" -f $m.Name)
+    Write-Rule ("PROFILE FOR: {0}" -f $m.Name)
     Write-Host ''
     foreach ($p in $profs) {
         if ($p.Ctx -eq -2) {
@@ -729,7 +729,7 @@ function Choose-Profile($m, $meta) {
         $ctx = $p.Ctx
         if ($ctx -eq -1) { $ctx = Find-MaxCtx $m $meta $p.Cache $vram $ram }
         if ($ctx -le 0) {
-            Write-Host ('   [{0}] {1,-11} {2,-34} non entra in VRAM' -f $p.Id, $p.Name, $p.Desc) -ForegroundColor $C.Err
+            Write-Host ('   [{0}] {1,-11} {2,-34} does not fit in VRAM' -f $p.Id, $p.Name, $p.Desc) -ForegroundColor $C.Err
             continue
         }
         $fit = Solve-Fit $m $meta $ctx $p.Cache $vram $ram $p.UBatch
@@ -743,7 +743,7 @@ function Choose-Profile($m, $meta) {
         Write-Host $tag -ForegroundColor $col
     }
     Write-Host ''
-    $sel = (Read-Host '   Profilo [1-6, invio=2]').Trim()
+    $sel = (Read-Host '   Profile [1-6, Enter=2]').Trim()
     if ($sel -eq '') { $sel = '2' }
     $p = $profs | Where-Object { $_.Id -eq $sel } | Select-Object -First 1
     if (-not $p) { return $null }
@@ -752,16 +752,16 @@ function Choose-Profile($m, $meta) {
     if ($ctx -eq -1) { $ctx = Find-MaxCtx $m $meta $p.Cache $vram $ram }
     if ($ctx -eq -2) {
         $maxFull = Find-MaxCtx $m $meta 'q8_0' $vram $ram
-        Write-Host "   max interamente in VRAM con cache q8_0: $maxFull token" -ForegroundColor $C.Dim
-        $c = (Read-Host '   Contesto in token').Trim()
+        Write-Host "   max fully in VRAM with q8_0 cache: $maxFull tokens" -ForegroundColor $C.Dim
+        $c = (Read-Host '   Context size in tokens').Trim()
         if ($c -match '^\d+$') { $ctx = [int]$c } else { return $null }
-        $k = (Read-Host '   Cache KV [f16/q8_0/q4_0, invio=q8_0]').Trim().ToLower()
+        $k = (Read-Host '   KV cache [f16/q8_0/q4_0, Enter=q8_0]').Trim().ToLower()
         if ($CacheBytes.ContainsKey($k)) { $p.Cache = $k }
     }
-    if ($ctx -le 0) { Write-Host '   contesto non valido' -ForegroundColor $C.Err; Start-Sleep 2; return $null }
+    if ($ctx -le 0) { Write-Host '   invalid context' -ForegroundColor $C.Err; Start-Sleep 2; return $null }
 
     $fit = Solve-Fit $m $meta $ctx $p.Cache $vram $ram $p.UBatch
-    # degrado automatico della cache se non entra
+    # automatic cache downgrade if it does not fit
     foreach ($ct in @('q8_0','q4_0')) {
         if ($fit.FullGpu -or $fit.NCpuMoe -gt 0) { break }
         $try = Solve-Fit $m $meta $ctx $ct $vram $ram $p.UBatch
@@ -771,18 +771,18 @@ function Choose-Profile($m, $meta) {
     $sampler = $null; $reasoning = $null; $reasoningEffort = $null
     if ($meta.Arch -match 'qwen3') {
         Write-Host ''
-        Write-Rule 'MODALITA QWEN3'
-        Write-Host '   [1] Thinking    ragionamento esplicito, piu lento  (temp 1.0, top_p .95, top_k 20)' -ForegroundColor $C.Val
-        Write-Host '   [2] Instruct    risposta diretta, piu veloce      (temp 0.7, top_p .80, presence_penalty 1.5)' -ForegroundColor $C.Val
-        Write-Host '   [invio] auto    lascia decidere al chat template' -ForegroundColor $C.Dim
-        $mm = (Read-Host '   Modalita [1/2, invio=auto]').Trim()
+        Write-Rule 'QWEN3 MODE'
+        Write-Host '   [1] Thinking    explicit reasoning, slower     (temp 1.0, top_p .95, top_k 20)' -ForegroundColor $C.Val
+        Write-Host '   [2] Instruct    direct answer, faster          (temp 0.7, top_p .80, presence_penalty 1.5)' -ForegroundColor $C.Val
+        Write-Host '   [Enter] auto    let the chat template decide' -ForegroundColor $C.Dim
+        $mm = (Read-Host '   Mode [1/2, Enter=auto]').Trim()
         switch ($mm) {
             '1' { $sampler = $SamplerPresets.qwen3.Thinking; $reasoning = 'on' }
             '2' { $sampler = $SamplerPresets.qwen3.NonThinking; $reasoning = 'off' }
             default { $reasoning = 'auto' }
         }
         if ($sampler -and $reasoning -eq 'on' -and $cfg.ServerHelp -match '--chat-template-kwargs') {
-            $eff = (Read-Host '   Reasoning effort [xhigh/high/medium/low/none, invio=default modello]').Trim().ToLower()
+            $eff = (Read-Host '   Reasoning effort [xhigh/high/medium/low/none, Enter=model default]').Trim().ToLower()
             if ($eff -in @('xhigh', 'high', 'medium', 'low', 'none')) { $reasoningEffort = $eff }
         }
     }
@@ -790,8 +790,8 @@ function Choose-Profile($m, $meta) {
     $draftModel = $null; $specType = $null
     $cand = Find-DraftFor $m (Get-DraftModels)
     $specOptions = @()
-    if ($cand) { $specOptions += [pscustomobject]@{ Key = '1'; Label = ("Draft esterno: {0} ({1:N1} GB)" -f $cand.Name, ($cand.Length / 1GB)); Kind = 'external' } }
-    if ($meta.HasNativeMtp) { $specOptions += [pscustomobject]@{ Key = "$($specOptions.Count + 1)"; Label = 'Nativo MTP (nessun file esterno, usa la testa gia nel modello)'; Kind = 'native' } }
+    if ($cand) { $specOptions += [pscustomobject]@{ Key = '1'; Label = ("External draft: {0} ({1:N1} GB)" -f $cand.Name, ($cand.Length / 1GB)); Kind = 'external' } }
+    if ($meta.HasNativeMtp) { $specOptions += [pscustomobject]@{ Key = "$($specOptions.Count + 1)"; Label = 'Native MTP (no external file, uses the head already in the model)'; Kind = 'native' } }
     if ($specOptions.Count -gt 0) {
         Write-Host ''
         Write-Rule 'SPECULATIVE DECODING'
@@ -799,8 +799,8 @@ function Choose-Profile($m, $meta) {
             Write-Host ('   [{0}] ' -f $so.Key) -NoNewline -ForegroundColor $C.Key
             Write-Host $so.Label -ForegroundColor $C.Val
         }
-        Write-Host '   [invio] nessuno (nessun rischio, comportamento normale)' -ForegroundColor $C.Dim
-        $sc = (Read-Host '   Scelta [invio=nessuno]').Trim()
+        Write-Host '   [Enter] none (no risk, normal behavior)' -ForegroundColor $C.Dim
+        $sc = (Read-Host '   Choice [Enter=none]').Trim()
         $chosen = $specOptions | Where-Object { $_.Key -eq $sc } | Select-Object -First 1
         if ($chosen) {
             if ($chosen.Kind -eq 'external') { $draftModel = $cand.FullName } else { $specType = 'draft-mtp' }
@@ -814,18 +814,18 @@ function Invoke-Bench($models, $metas) {
     $exe = Find-Server
     if (-not $exe) { return }
     $bench = Join-Path (Split-Path $exe) 'llama-bench.exe'
-    if (-not (Test-Path $bench)) { Write-Host '   llama-bench.exe non presente' -ForegroundColor $C.Err; Read-Host; return }
-    $i = (Read-Host '   Numero del modello da testare').Trim()
+    if (-not (Test-Path $bench)) { Write-Host '   llama-bench.exe not present' -ForegroundColor $C.Err; Read-Host; return }
+    $i = (Read-Host '   Number of the model to test').Trim()
     if ($i -notmatch '^\d+$' -or [int]$i -lt 1 -or [int]$i -gt $models.Count) { return }
     $idx = [int]$i - 1
     $m = $models[$idx]; $meta = $metas[$idx]
     $fit = Solve-Fit $m $meta ([Math]::Min(8192, [int]$meta.CtxTrain)) 'q8_0' ($cfg.VramGB * 1024) ($cfg.RamGB * 1024)
     Write-Host ''
-    Write-Host "   llama-bench con -ngl $($fit.Ngl) (pp512 = prompt, tg128 = generazione)" -ForegroundColor $C.Dim
+    Write-Host "   llama-bench with -ngl $($fit.Ngl) (pp512 = prompt, tg128 = generation)" -ForegroundColor $C.Dim
     Write-Host ''
     & $bench -m $m.File.FullName -ngl $fit.Ngl -p 512 -n 128 -r 2
     Write-Host ''
-    Read-Host '   invio'
+    Read-Host '   Enter'
 }
 
 # ------------------------------------------------------------ main -----
@@ -838,32 +838,32 @@ if (Test-Path $ConfigPath) {
     } catch { }
 }
 if ($SelfTest) {
-    # controllo minimo: parsing GGUF reale + coerenza del calcolo di fit
+    # minimal check: real GGUF parsing + fit computation consistency
     if (-not $cfg.VramGB) { $cfg.VramGB = 10; $cfg.RamGB = 32; $cfg.Cores = 8 }
     $models = @(Get-Models)
-    if ($models.Count -eq 0) { throw 'self-test: nessun .gguf trovato' }
+    if ($models.Count -eq 0) { throw 'self-test: no .gguf found' }
     $vram = $cfg.VramGB * 1024; $ram = $cfg.RamGB * 1024
     foreach ($m in $models) {
         $meta = Get-MetaCached $m.File
-        if ($null -eq $meta) { throw "self-test: metadati illeggibili $($m.Name)" }
-        if ($meta.NLayer -le 0 -or $meta.NEmbd -le 0) { throw "self-test: dimensioni assurde $($m.Name)" }
+        if ($null -eq $meta) { throw "self-test: unreadable metadata $($m.Name)" }
+        if ($meta.NLayer -le 0 -or $meta.NEmbd -le 0) { throw "self-test: absurd dimensions $($m.Name)" }
         $small = Solve-Fit $m $meta 4096   'q8_0' $vram $ram
         $big   = Solve-Fit $m $meta 131072 'q8_0' $vram $ram
-        if ($big.Ngl -gt $small.Ngl) { throw "self-test: ctx maggiore non puo' aumentare ngl ($($m.Name))" }
-        if ($big.VramMB -lt $small.VramMB -and $small.FullGpu -and $big.FullGpu) { throw "self-test: VRAM non monotona ($($m.Name))" }
-        if ((Get-KvPerTokenMB $meta 'q4_0') -ge (Get-KvPerTokenMB $meta 'f16')) { throw "self-test: q4_0 deve pesare meno di f16 ($($m.Name))" }
+        if ($big.Ngl -gt $small.Ngl) { throw "self-test: larger ctx cannot increase ngl ($($m.Name))" }
+        if ($big.VramMB -lt $small.VramMB -and $small.FullGpu -and $big.FullGpu) { throw "self-test: VRAM not monotonic ($($m.Name))" }
+        if ((Get-KvPerTokenMB $meta 'q4_0') -ge (Get-KvPerTokenMB $meta 'f16')) { throw "self-test: q4_0 must weigh less than f16 ($($m.Name))" }
         $f16 = Solve-Fit $m $meta 8192 'f16'  $vram $ram
         $q4  = Solve-Fit $m $meta 8192 'q4_0' $vram $ram
-        if ($q4.Ngl -lt $f16.Ngl) { throw "self-test: cache piu' leggera non puo' ridurre i layer su GPU ($($m.Name))" }
+        if ($q4.Ngl -lt $f16.Ngl) { throw "self-test: lighter cache cannot reduce GPU layers ($($m.Name))" }
         $mx = Find-MaxCtx $m $meta 'q8_0' $vram $ram
         if ($mx -gt 0) {
             $fit = Solve-Fit $m $meta $mx 'q8_0' $vram $ram
-            if (-not $fit.FullGpu) { throw "self-test: Find-MaxCtx ha restituito un ctx non full-GPU ($($m.Name))" }
+            if (-not $fit.FullGpu) { throw "self-test: Find-MaxCtx returned a non full-GPU ctx ($($m.Name))" }
         }
         '{0,-52} {1,-8} L{2,-4} kv/tok {3,6:N3} MB  maxctx {4,7:N0}' -f `
             $m.Name.Substring(0, [Math]::Min(50, $m.Name.Length)), $meta.Quant, $meta.NLayer, (Get-KvPerTokenMB $meta 'q8_0'), $mx
     }
-    # costruzione argomenti: verifica su un modello che richiede offload
+    # argument building: check on a model that needs offload
     $exe = Find-Server
     if ($exe) {
         $help = Get-ServerHelp $exe
@@ -873,37 +873,37 @@ if ($SelfTest) {
             $fit  = Solve-Fit $m $meta ([Math]::Min(32768, [int]$meta.CtxTrain)) 'q8_0' $vram $ram $prof.UBatch
             $al   = Get-ArgList $m $meta $fit $prof $help 1234 8 (-not $fit.FullGpu)
             $s = $al -join ' '
-            if ($s -notmatch '-ngl \d+') { throw "self-test: -ngl mancante ($($m.Name))" }
-            if ($s -notmatch '-c \d+')   { throw "self-test: -c mancante ($($m.Name))" }
-            if ($fit.CacheType -ne 'f16' -and $s -notmatch 'cache-type-k') { throw "self-test: cache-type mancante ($($m.Name))" }
-            if ($fit.NCpuMoe -gt 0 -and $s -notmatch 'n-cpu-moe|override-tensor') { throw "self-test: offload MoE non passato ($($m.Name))" }
-            '  args: {0}' -f ($s -replace [regex]::Escape($m.File.FullName), '<modello>')
+            if ($s -notmatch '-ngl \d+') { throw "self-test: -ngl missing ($($m.Name))" }
+            if ($s -notmatch '-c \d+')   { throw "self-test: -c missing ($($m.Name))" }
+            if ($fit.CacheType -ne 'f16' -and $s -notmatch 'cache-type-k') { throw "self-test: cache-type missing ($($m.Name))" }
+            if ($fit.NCpuMoe -gt 0 -and $s -notmatch 'n-cpu-moe|override-tensor') { throw "self-test: MoE offload not passed ($($m.Name))" }
+            '  args: {0}' -f ($s -replace [regex]::Escape($m.File.FullName), '<model>')
 
             if ($meta.Arch -match 'qwen3') {
                 $alQ = Get-ArgList $m $meta $fit $prof $help 1234 8 (-not $fit.FullGpu) $SamplerPresets.qwen3.NonThinking 'off' 'medium'
                 $sq = $alQ -join ' '
-                if ($sq -notmatch '--temp 0\.7') { throw "self-test: preset sampler qwen3 non applicato ($($m.Name))" }
-                if ($sq -notmatch '--reasoning off') { throw "self-test: --reasoning non passato ($($m.Name))" }
-                if ($help -match '--chat-template-kwargs' -and $sq -notmatch 'reasoning_effort') { throw "self-test: reasoning_effort non passato ($($m.Name))" }
+                if ($sq -notmatch '--temp 0\.7') { throw "self-test: qwen3 sampler preset not applied ($($m.Name))" }
+                if ($sq -notmatch '--reasoning off') { throw "self-test: --reasoning not passed ($($m.Name))" }
+                if ($help -match '--chat-template-kwargs' -and $sq -notmatch 'reasoning_effort') { throw "self-test: reasoning_effort not passed ($($m.Name))" }
 
                 $alD = Get-ArgList $m $meta $fit $prof $help 1234 8 (-not $fit.FullGpu) $null $null $null 'C:\fake\draft-dflash.gguf'
                 $sd = $alD -join ' '
-                if ($help -match '--spec-draft-model' -and $sd -notmatch '--spec-draft-model') { throw "self-test: draft model non passato ($($m.Name))" }
-                if ($help -match '--spec-type' -and $sd -notmatch '--spec-type draft-dflash') { throw "self-test: spec-type draft-dflash non passato ($($m.Name))" }
+                if ($help -match '--spec-draft-model' -and $sd -notmatch '--spec-draft-model') { throw "self-test: draft model not passed ($($m.Name))" }
+                if ($help -match '--spec-type' -and $sd -notmatch '--spec-type draft-dflash') { throw "self-test: spec-type draft-dflash not passed ($($m.Name))" }
 
                 if ($meta.HasNativeMtp) {
                     $alM = Get-ArgList $m $meta $fit $prof $help 1234 8 (-not $fit.FullGpu) $null $null $null $null 'draft-mtp'
                     $sm = $alM -join ' '
-                    if ($sm -match '--spec-draft-model') { throw "self-test: draft-mtp nativo non deve passare --spec-draft-model ($($m.Name))" }
-                    if ($help -match '--spec-type' -and $sm -notmatch '--spec-type draft-mtp') { throw "self-test: spec-type draft-mtp non passato ($($m.Name))" }
+                    if ($sm -match '--spec-draft-model') { throw "self-test: native draft-mtp must not pass --spec-draft-model ($($m.Name))" }
+                    if ($help -match '--spec-type' -and $sm -notmatch '--spec-type draft-mtp') { throw "self-test: spec-type draft-mtp not passed ($($m.Name))" }
                 }
             }
         }
     }
 
-    # abbinamento target <-> draft DFlash/DSpark per prefisso famiglia
+    # target <-> DFlash/DSpark draft matching by family prefix
     if ((Get-ModelFamily 'Qwen3.8-27B-Q4_K_M') -ne (Get-ModelFamily 'Qwen3.8-27B-DFlash2-Q8_0')) {
-        throw 'self-test: abbinamento famiglia target/draft DFlash non funziona'
+        throw 'self-test: target/draft DFlash family matching does not work'
     }
     Write-Host 'self-test OK' -ForegroundColor Green
     exit 0
@@ -915,20 +915,20 @@ while ($true) {
     $models = @(Get-Models)
     if ($models.Count -eq 0) {
         Write-Banner
-        Write-Host "   Nessun file .gguf trovato in:" -ForegroundColor $C.Err
+        Write-Host "   No .gguf file found in:" -ForegroundColor $C.Err
         Write-Host "     $ScriptDir" -ForegroundColor $C.Dim
         Write-Host ''
-        Write-Host '   [D] indica la cartella dei modelli    [Q] esci' -ForegroundColor $C.Key
+        Write-Host '   [D] set the model folder               [Q] quit' -ForegroundColor $C.Key
         $a = (Read-Host '   >').Trim().ToUpper()
         if ($a -eq 'Q') { exit 0 }
         if ($a -eq 'D') {
-            $d = (Read-Host '   Percorso').Trim('"').Trim()
+            $d = (Read-Host '   Path').Trim('"').Trim()
             if (Test-Path $d) { $cfg.ExtraDirs = @($cfg.ExtraDirs + $d | Where-Object { $_ } | Select-Object -Unique); Save-Config }
         }
         continue
     }
 
-    Write-Host '   lettura metadati GGUF...' -ForegroundColor $C.Dim
+    Write-Host '   reading GGUF metadata...' -ForegroundColor $C.Dim
     $metas = @()
     foreach ($m in $models) { try { $metas += (Get-MetaCached $m.File) } catch { $metas += $null } }
 
@@ -939,30 +939,30 @@ while ($true) {
         '^Q$' { exit 0 }
         '^K$' {
             $p = Get-Process llama-server -ErrorAction SilentlyContinue
-            if ($p) { $p | Stop-Process -Force; Write-Host "   $($p.Count) server terminati." -ForegroundColor $C.Warn }
-            else { Write-Host '   nessun server attivo.' -ForegroundColor $C.Dim }
+            if ($p) { $p | Stop-Process -Force; Write-Host "   $($p.Count) server(s) stopped." -ForegroundColor $C.Warn }
+            else { Write-Host '   no active server.' -ForegroundColor $C.Dim }
             Start-Sleep 1
         }
         '^H$' { Ask-Hardware }
         '^I$' { Install-LlamaCpp }
         '^B$' { Invoke-Bench $models $metas }
         '^D$' {
-            $d = (Read-Host '   Percorso della cartella modelli').Trim('"').Trim()
+            $d = (Read-Host '   Path of the model folder').Trim('"').Trim()
             if (Test-Path $d) { $cfg.ExtraDirs = @(@($cfg.ExtraDirs) + $d | Where-Object { $_ } | Select-Object -Unique); Save-Config }
-            else { Write-Host '   percorso inesistente' -ForegroundColor $C.Err; Start-Sleep 2 }
+            else { Write-Host '   path does not exist' -ForegroundColor $C.Err; Start-Sleep 2 }
         }
         '^\d+$' {
             $idx = [int]$sel - 1
             if ($idx -lt 0 -or $idx -ge $models.Count) { continue }
             $meta = $metas[$idx]
-            if ($null -eq $meta) { Write-Host '   metadati illeggibili per questo file' -ForegroundColor $C.Err; Start-Sleep 2; continue }
+            if ($null -eq $meta) { Write-Host '   unreadable metadata for this file' -ForegroundColor $C.Err; Start-Sleep 2; continue }
             $exe = Find-Server
-            if (-not $exe) { Write-Host '   llama-server non trovato: usa [I] per installarlo' -ForegroundColor $C.Err; Start-Sleep 2; continue }
+            if (-not $exe) { Write-Host '   llama-server not found: use [I] to install it' -ForegroundColor $C.Err; Start-Sleep 2; continue }
             if (-not $cfg.ServerHelp) { $cfg.ServerHelp = Get-ServerHelp $exe; Save-Config }
             $choice = Choose-Profile $models[$idx] $meta
             if ($null -eq $choice) { continue }
             if (Start-Model $models[$idx] $meta $choice.Fit $choice.Profile $exe $cfg.ServerHelp $BasePort $choice.Sampler $choice.Reasoning $choice.ReasoningEffort $choice.DraftModel $choice.SpecType) {
-                Write-Host '   [invio] torna al menu   [Q] esci lasciando il server attivo' -ForegroundColor $C.Key
+                Write-Host '   [Enter] back to the menu   [Q] quit leaving the server running' -ForegroundColor $C.Key
                 if ((Read-Host '   >').Trim().ToUpper() -eq 'Q') { exit 0 }
             }
         }

@@ -29,7 +29,6 @@ When starting a model it also lets you pick the **profile**, the **context size*
 the **KV cache type** (`f16` / `q8_0` / `q4_0`), the run mode and the reasoning effort.
 It starts `llama-server` on `:1234` and keeps the menu open so you can stop it again.
 
-> The launcher UI is in Italian.
 
 Settings (VRAM/RAM/cores, extra model folders) live in `launcher.config.json`, created next
 to the script.
