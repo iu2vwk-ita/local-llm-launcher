@@ -8,12 +8,36 @@ llama.cpp release binaries and Node.js (only for the proxy).
 
 Author: **IU2VWK** - <https://iu2vwk.com>
 
-## What's inside
+## Main launcher
+
+**Double-click `Avvia Modelli.bat`** (runs `Avvia-Modelli.ps1`).
+
+It scans the model folders, reads the real GGUF metadata (architecture, layers, GQA/MoE,
+quantization) and computes the launch parameters from the VRAM/RAM you declare.
+
+Menu:
+
+| Key | Action |
+|---|---|
+| `[1-9]` | start a model |
+| `[K]` | close the active server(s) |
+| `[H]` | set hardware (VRAM / RAM / cores) |
+| `[B]` | benchmark a model (`llama-bench`) |
+| `[Q]` | quit |
+
+When starting a model it also lets you pick the **profile**, the **context size** (tokens),
+the **KV cache type** (`f16` / `q8_0` / `q4_0`), the run mode and the reasoning effort.
+It starts `llama-server` on `:1234` and keeps the menu open so you can stop it again.
+
+> The launcher UI is in Italian.
+
+Settings (VRAM/RAM/cores, extra model folders) live in `launcher.config.json`, created next
+to the script.
+
+## Other files
 
 | File | Purpose |
 |---|---|
-| `launch-models.bat` | **Double-click launcher**: scans `models\`, shows a menu, starts the chosen model |
-| `llama-launcher.ps1` | The scanner/launcher behind it; also non-interactive with `-Model` |
 | `switch-model.bat` | Quick switch from a terminal: `switch-model.bat <model.gguf> [ctx] [port]` |
 | `server-optimized.bat.example` | Reference tuned flag set (RTX 3080 10 GB) - copy and edit |
 | `llama-proxy.js` | `:1235 -> :1234` proxy that merges consecutive `system`/`user` messages (fixes "System message must be at the beginning" and "roles must alternate") |
@@ -31,47 +55,16 @@ G:\LLAMA\
   llama.dll
   ggml-cuda.dll
   ...            (rest of the llama.cpp release)
-  launch-models.bat
-  llama-launcher.ps1
+  Avvia Modelli.bat
+  Avvia-Modelli.ps1
   llama-proxy.js
   ...
   models\
     my-model.gguf
 ```
 
-All scripts resolve paths from their own location, so any folder works.
-
-## Quick start
-
-1. Download a llama.cpp Windows build (CUDA for NVIDIA, Vulkan for AMD/Intel) from
-   <https://github.com/ggml-org/llama.cpp/releases> and extract it into e.g. `G:\LLAMA`.
-2. Copy the scripts from this repo into the same folder.
-3. Start a model:
-   - **Double-click `launch-models.bat`** and pick a number from the menu, or
-   - from a terminal:
-     ```
-     llama-launcher.ps1 -Model my-model.gguf -Context 32768   # direct
-     llama-launcher.ps1 -List                                 # just scan
-     switch-model.bat my-model.gguf 32768                     # quick switch
-     ```
-   The server is then at `http://127.0.0.1:1234`.
-4. (Optional) Point OpenCode at the proxy so consecutive system/user messages are merged:
-   `llama-launcher.ps1` starts `llama-proxy.js` for you; otherwise run `node llama-proxy.js`
-   and use `http://127.0.0.1:1235/v1` as the base URL.
-5. (Optional) Claude Code: configure `~/.claude-code-router/config.json` with a provider
-   pointing at `http://127.0.0.1:1234/v1`, then run `claude-local.ps1`.
-
-## The launcher menu
-
-`llama-launcher.ps1` scans `models\*.gguf` (skips `mmproj` vision projectors), reads the
-`general.architecture` field from each GGUF header, and shows:
-
-```
-  [ 1] my-model.gguf                                   4,97 GB  qwen35
-  [ 2] Spark-X2.5-4B-Q8_0.gguf                         4,07 GB  spark2_5
-```
-
-Pick a number and it starts `llama-server` (killing any previous one).
+Scripts resolve paths from their own location; extra model folders can be added in
+`launcher.config.json` (`ExtraDirs`).
 
 ## Model compatibility
 
@@ -87,9 +80,8 @@ Example: `Spark-X2.5` (`spark2_5`) needs llama.cpp **b10809 or newer**; older bu
 ## Notes
 
 - `-ngl` defaults to `auto` and `--fit` is `on` in recent builds, so VRAM is filled
-  automatically. Leave `-Context` at 0 to let llama.cpp pick the context size too.
-- The scripts keep flags minimal. For long context add `-c <n>`, or `-ctk q4_0 -ctv q4_0`
-  to halve the KV cache.
+  automatically.
+- For long context prefer a lighter KV cache (`q8_0` or `q4_0`).
 
 ## License
 
