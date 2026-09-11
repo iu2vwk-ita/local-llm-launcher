@@ -1,0 +1,16 @@
+@echo off
+REM Reference: tuned flag set used on an RTX 3080 10 GB.
+REM Copy to server-optimized.bat and set MODEL.
+setlocal
+set "ROOT=%~dp0"
+set "MODEL=%ROOT%models\YOUR-MODEL.gguf"
+
+if not exist "%ROOT%llama-server.exe" ( echo llama-server.exe not found in %ROOT% & exit /b 1 )
+if not exist "%MODEL%" ( echo Model not found: %MODEL% & exit /b 1 )
+
+taskkill /F /IM llama-server.exe 2>nul
+start "" "%ROOT%llama-server.exe" -m "%MODEL%" --host 127.0.0.1 --port 1234 ^
+  -c 131072 -b 4096 -ub 1024 -t 11 -tb 11 ^
+  --flash-attn on --cache-type-k q4_0 --cache-type-v q4_0 ^
+  --load-mode mlock --jinja --no-warmup --alias local-model -n -1
+echo llama-server -^> http://127.0.0.1:1234  (alias local-model)

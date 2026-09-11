@@ -1,0 +1,11 @@
+version = 1
+
+[example]
+m = G:\LLAMA\models\example.gguf
+c = 32768
+b = 4096
+ub = 1024
+ctk = q8_0
+ctv = q8_0
+fa = on
+ngl = 99

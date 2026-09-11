@@ -1,0 +1,19 @@
+# Models and binaries are never committed
+*.gguf
+models/
+llama*.dll
+ggml*.dll
+mtmd.dll
+libomp*.dll
+cublas*.dll
+cudart*.dll
+*.exe
+
+# Logs
+*.log
+*.log.err
+
+# Local config / backups
+models.ini
+server-optimized.bat
+_backup-*/
